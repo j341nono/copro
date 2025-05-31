@@ -1,0 +1,17 @@
+[package]
+name = "copro"
+version = "0.1.0"
+edition = "2024"
+description = "File copy tool with progress bar"
+repository = "https://github.com/j341nono/copro"
+readme = "README.md"
+categories = ["command-line-utilities"]
+keywords = ["backup", "cli", "rust"]
+
+[dependencies]
+clap = { version = "4.5.4", features = ["derive"] }
+dialoguer = "0.11"
+indicatif = "0.17"
+console = "0.15"
+anyhow = "1.0"
+fs_extra = "1.3"
