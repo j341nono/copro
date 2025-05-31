@@ -302,9 +302,27 @@ fn main() -> Result<()> {
             )
         });
 
+    // Check if source exists
+    if !source.exists() {
+        eprintln!("{} Source path does not exist: {}", 
+            style("❌ ERROR:").red().bold(),
+            style(source.display()).white()
+        );
+        return Ok(());
+    }
+
     let files = collect_files(&source)?;
     let total_bytes = total_size(&files);
     let file_count = files.len();
+    
+    // Check if there are any files to copy
+    if file_count == 0 {
+        println!("{} No files found to copy from: {}", 
+            style("⚠️ WARNING:").yellow().bold(),
+            style(source.display()).white()
+        );
+        return Ok(());
+    }
     
     println!("🚀 {} Starting copy operation...", style("INITIALIZING").cyan().bold());
     println!("📁 Files to copy: {}", style(file_count).yellow().bold());
@@ -331,6 +349,15 @@ fn main() -> Result<()> {
             return Ok(());
         }
 
+        // Check if source file still exists before copying
+        if !file.exists() {
+            println!("\n{} {} (file no longer exists)", 
+                style("❌ Skipped:").yellow().bold(),
+                style(file.display()).white()
+            );
+            continue;
+        }
+
         let rel_path = file.strip_prefix(&source).unwrap_or(&file);
         let dest_path = if source.is_file() {
             if destination.is_dir() {
@@ -349,17 +376,26 @@ fn main() -> Result<()> {
         }
     
         // Use safe copy with temporary file (unless fast mode)
-        match if cli.fast_mode {
+        let copy_result = if cli.fast_mode {
             fs::copy(&file, &dest_path)
         } else {
             copy_file_with_temp(&file, &dest_path)
-        } {
-            Ok(_) => {
+        };
+
+        match copy_result {
+            Ok(bytes_copied) => {
+                if bytes_copied == 0 {
+                    println!("\n{} {} (0 bytes copied - file may be empty)", 
+                        style("⚠️ Warning:").yellow().bold(),
+                        style(file.display()).white()
+                    );
+                }
                 progress.increment();
                 if cli.verbose {
-                    println!("\n{} {}", 
+                    println!("\n{} {} ({} bytes)", 
                         style("✅ Success:").green().bold(),
-                        style(file.display()).white()
+                        style(file.display()).white(),
+                        style(bytes_copied).cyan()
                     );
                 }
             }
@@ -371,14 +407,16 @@ fn main() -> Result<()> {
                 );
                 
                 // Clean up any partial temporary files
-                let temp_dest = dest_path.with_extension(
-                    format!("{}.tmp", 
-                        dest_path.extension()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("tmp")
-                    )
-                );
-                let _ = fs::remove_file(&temp_dest);
+                if !cli.fast_mode {
+                    let temp_dest = dest_path.with_extension(
+                        format!("{}.tmp", 
+                            dest_path.extension()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("tmp")
+                        )
+                    );
+                    let _ = fs::remove_file(&temp_dest);
+                }
             }
         }
         
