@@ -8,11 +8,8 @@ use std::{
 };
 use anyhow::Result;
 
-/// BackUP CLI Tool
+/// File copy tool with progress bar
 #[derive(Parser)]
-#[command(name = "bak")]
-#[command(version = "0.1")]
-#[command(about = "File backup (copy) tool with progress bar", long_about = None)]
 struct Cli {
     /// source path
     #[arg(short, long)]
