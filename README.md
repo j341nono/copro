@@ -1,8 +1,6 @@
 # copro
 
-**copro (short of Copy with Progress)** is a command-line file backup (copy) tool with progress bar for efficient file operations.
-
-Compared to the standard cp command, there may be a 1-5% performance overhead for large files (GB-sized).
+**copro (Copy with Progress)** is a command-line file backup (copy) tool featuring a simple, rainbow-colored animated progress bar for efficient file operations.
 
 ## Installation
 
