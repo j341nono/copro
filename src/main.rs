@@ -268,6 +268,7 @@ fn setup_signal_handler() -> Result<(mpsc::Receiver<()>, Arc<AtomicBool>)> {
     Ok((rx, interrupted))
 }
 
+
 fn copy_file_with_temp(source: &Path, destination: &Path) -> std::io::Result<u64> {
     // Create temporary file name
     let temp_dest = destination.with_extension(
@@ -286,6 +287,8 @@ fn copy_file_with_temp(source: &Path, destination: &Path) -> std::io::Result<u64
     
     Ok(bytes_copied)
 }
+
+fn collect_files(path: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     if path.is_file() {
         files.push(path.to_path_buf());
@@ -302,6 +305,7 @@ fn copy_file_with_temp(source: &Path, destination: &Path) -> std::io::Result<u64
     }
     Ok(files)
 }
+
 
 fn total_size(files: &[PathBuf]) -> u64 {
     files.iter()
