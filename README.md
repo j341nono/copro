@@ -9,7 +9,7 @@ Compared to the standard cp command, there may be a 1-5% performance overhead fo
 ### From Source
 
 ```bash
-git clone https://github.com/your-username/copro.git
+git clone https://github.com/j341nono/copro.git
 cd copro
 cargo build --release
 cargo install --path .
