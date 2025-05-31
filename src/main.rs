@@ -1,41 +1,5 @@
 use clap::Parser;
-use console::{style, Term}
-
-fn setup_signal_handler() -> Result<(mpsc::Receiver<()>, Arc<AtomicBool>)> {
-    let (tx, rx) = mpsc::channel();
-    let interrupted = Arc::new(AtomicBool::new(false));
-    let interrupted_clone = Arc::clone(&interrupted);
-    
-    thread::spawn(move || {
-        let mut signals = Signals::new(&[SIGINT]).expect("Failed to register signal handler");
-        for _ in signals.forever() {
-            interrupted_clone.store(true, Ordering::Relaxed);
-            let _ = tx.send(());
-            break;
-        }
-    });
-    
-    Ok((rx, interrupted))
-}
-
-fn copy_file_with_temp(source: &Path, destination: &Path) -> std::io::Result<u64> {
-    // Create temporary file name
-    let temp_dest = destination.with_extension(
-        format!("{}.tmp", 
-            destination.extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("tmp")
-        )
-    );
-    
-    // Copy to temporary file first
-    let bytes_copied = fs::copy(source, &temp_dest)?;
-    
-    // Rename temporary file to final destination (atomic operation)
-    fs::rename(&temp_dest, destination)?;
-    
-    Ok(bytes_copied)
-};
+use console::{style, Term};
 use dialoguer::Input;
 use std::{
     fs,
@@ -268,7 +232,6 @@ fn setup_signal_handler() -> Result<(mpsc::Receiver<()>, Arc<AtomicBool>)> {
     Ok((rx, interrupted))
 }
 
-
 fn copy_file_with_temp(source: &Path, destination: &Path) -> std::io::Result<u64> {
     // Create temporary file name
     let temp_dest = destination.with_extension(
@@ -305,7 +268,6 @@ fn collect_files(path: &Path) -> Result<Vec<PathBuf>> {
     }
     Ok(files)
 }
-
 
 fn total_size(files: &[PathBuf]) -> u64 {
     files.iter()
