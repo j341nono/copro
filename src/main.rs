@@ -6,9 +6,11 @@ use std::{
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::mpsc,
 };
 use anyhow::Result;
+use signal_hook::{consts::SIGINT, iterator::Signals};
 
 /// File copy tool with dynamic terminal animation
 #[derive(Parser)]
@@ -30,6 +32,14 @@ struct Cli {
     /// show per-file copy success messages
     #[arg(short, long)]
     verbose: bool,
+
+    /// skip temporary file protection for maximum speed
+    #[arg(long)]
+    fast_mode: bool,
+
+    /// reduce animation update frequency for better performance
+    #[arg(long)]
+    low_animation: bool,
 }
 
 struct AnimatedProgress {
@@ -40,6 +50,8 @@ struct AnimatedProgress {
     animation_chars: Vec<&'static str>,
     wave_chars: Vec<&'static str>,
     colors: Vec<console::Color>,
+    should_stop: Arc<AtomicBool>,
+    animation_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl AnimatedProgress {
@@ -59,10 +71,12 @@ impl AnimatedProgress {
                 console::Color::Blue,
                 console::Color::Magenta,
             ],
+            should_stop: Arc::new(AtomicBool::new(false)),
+            animation_handle: None,
         }
     }
 
-    fn start_animation(&self) {
+    fn start_animation(&mut self, low_animation: bool) {
         let current = Arc::clone(&self.current);
         let total = self.total;
         let term = self.term.clone();
@@ -70,10 +84,11 @@ impl AnimatedProgress {
         let wave_chars = self.wave_chars.clone();
         let colors = self.colors.clone();
         let start_time = self.start_time;
+        let should_stop = Arc::clone(&self.should_stop);
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let mut frame = 0;
-            loop {
+            while !should_stop.load(Ordering::Relaxed) {
                 let current_count = *current.lock().unwrap();
                 if current_count >= total {
                     break;
@@ -130,10 +145,14 @@ impl AnimatedProgress {
                 let _ = term.write_str(&animation_line);
                 let _ = term.flush();
                 
-                thread::sleep(Duration::from_millis(100));
+                // Configurable animation speed
+                let sleep_duration = if low_animation { 200 } else { 100 };
+                thread::sleep(Duration::from_millis(sleep_duration));
                 frame += 1;
             }
         });
+
+        self.animation_handle = Some(handle);
     }
 
     fn increment(&self) {
@@ -141,7 +160,16 @@ impl AnimatedProgress {
         *current += 1;
     }
 
-    fn finish(&self) {
+    fn stop_animation(&mut self) {
+        self.should_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.animation_handle.take() {
+            let _ = handle.join();
+        }
+    }
+
+    fn finish(&mut self) {
+        self.stop_animation();
+        
         let current_count = *self.current.lock().unwrap();
         let elapsed = self.start_time.elapsed();
         
@@ -161,9 +189,67 @@ impl AnimatedProgress {
         let _ = self.term.write_str(&completion_line);
         let _ = self.term.flush();
     }
+
+    fn interrupted(&mut self) {
+        self.stop_animation();
+        
+        let current_count = *self.current.lock().unwrap();
+        let elapsed = self.start_time.elapsed();
+        
+        // Clear the animation line
+        let _ = self.term.write_str("\r");
+        let _ = self.term.clear_line();
+        
+        // Show interruption message
+        let interruption_line = format!(
+            "\n🛑 {} Operation interrupted after {:.2}s\n📊 Progress: {}/{} files copied\n⚠️  {} Some files may be partially copied\n",
+            style("INTERRUPTED!").red().bold(),
+            elapsed.as_secs_f32(),
+            style(current_count).yellow().bold(),
+            style(self.total).yellow().bold(),
+            style("WARNING:").yellow().bold()
+        );
+        
+        let _ = self.term.write_str(&interruption_line);
+        let _ = self.term.flush();
+    }
 }
 
-fn collect_files(path: &Path) -> std::io::Result<Vec<PathBuf>> {
+fn setup_signal_handler() -> Result<(mpsc::Receiver<()>, Arc<AtomicBool>)> {
+    let (tx, rx) = mpsc::channel();
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let interrupted_clone = Arc::clone(&interrupted);
+    
+    thread::spawn(move || {
+        let mut signals = Signals::new(&[SIGINT]).expect("Failed to register signal handler");
+        for _ in signals.forever() {
+            interrupted_clone.store(true, Ordering::Relaxed);
+            let _ = tx.send(());
+            break;
+        }
+    });
+    
+    Ok((rx, interrupted))
+}
+
+fn copy_file_with_temp(source: &Path, destination: &Path) -> std::io::Result<u64> {
+    // Create temporary file name
+    let temp_dest = destination.with_extension(
+        format!("{}.tmp", 
+            destination.extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("tmp")
+        )
+    );
+    
+    // Copy to temporary file first
+    let bytes_copied = fs::copy(source, &temp_dest)?;
+    
+    // Rename temporary file to final destination (atomic operation)
+    fs::rename(&temp_dest, destination)?;
+    
+    Ok(bytes_copied)
+}
     let mut files = Vec::new();
     if path.is_file() {
         files.push(path.to_path_buf());
@@ -190,6 +276,9 @@ fn total_size(files: &[PathBuf]) -> u64 {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Set up signal handler for graceful shutdown
+    let (interrupt_rx, interrupted) = setup_signal_handler()?;
 
     let source = cli.source.or(cli.source_positional)
         .unwrap_or_else(|| {
@@ -218,15 +307,28 @@ fn main() -> Result<()> {
     println!("🚀 {} Starting copy operation...", style("INITIALIZING").cyan().bold());
     println!("📁 Files to copy: {}", style(file_count).yellow().bold());
     println!("💾 Total size: {} bytes", style(total_bytes).green().bold());
+    println!("💡 Press Ctrl+C to safely stop the operation");
     println!();
 
-    let progress = AnimatedProgress::new(file_count);
-    progress.start_animation();
+    let mut progress = AnimatedProgress::new(file_count);
+    progress.start_animation(cli.low_animation);
 
     // Small delay to let animation start
     thread::sleep(Duration::from_millis(200));
 
     for file in files {
+        // Check for interruption before each file
+        if interrupted.load(Ordering::Relaxed) {
+            progress.interrupted();
+            return Ok(());
+        }
+
+        // Check for interruption signal (non-blocking)
+        if interrupt_rx.try_recv().is_ok() {
+            progress.interrupted();
+            return Ok(());
+        }
+
         let rel_path = file.strip_prefix(&source).unwrap_or(&file);
         let dest_path = if source.is_file() {
             if destination.is_dir() {
@@ -244,7 +346,12 @@ fn main() -> Result<()> {
             fs::create_dir_all(parent)?;
         }
     
-        match fs::copy(&file, &dest_path) {
+        // Use safe copy with temporary file (unless fast mode)
+        match if cli.fast_mode {
+            fs::copy(&file, &dest_path)
+        } else {
+            copy_file_with_temp(&file, &dest_path)
+        } {
             Ok(_) => {
                 progress.increment();
                 if cli.verbose {
@@ -260,6 +367,16 @@ fn main() -> Result<()> {
                     style(file.display()).white(),
                     style(e).red()
                 );
+                
+                // Clean up any partial temporary files
+                let temp_dest = dest_path.with_extension(
+                    format!("{}.tmp", 
+                        dest_path.extension()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("tmp")
+                    )
+                );
+                let _ = fs::remove_file(&temp_dest);
             }
         }
         
