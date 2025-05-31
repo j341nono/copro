@@ -87,7 +87,7 @@ fn main() -> Result<()> {
             .unwrap(),
     );
 
-    println!("{} ファイルをコピーします（合計サイズ: {} bytes）", files.len(), total_bytes);
+    println!("Copying {} files (total size: {} bytes)", files.len(), total_bytes);
 
     for file in files {
         let rel_path = file.strip_prefix(&source).unwrap_or(&file);
@@ -111,14 +111,14 @@ fn main() -> Result<()> {
             Ok(copied_bytes) => {
                 bar.inc(copied_bytes);
                 if cli.verbose {
-                    bar.println(format!("{}", style(format!("✅ 成功: {}", file.display())).green()));
+                    bar.println(format!("{}", style(format!("✅ Success: {}", file.display())).green()));
                 }
             }
             Err(e) => {
-                bar.println(format!("{}", style(format!("❌ 失敗: {} ({})", file.display(), e)).red()));
+                bar.println(format!("{}", style(format!("❌ Failed: {} ({})", file.display(), e)).red()));
             }
         }
     }
-    bar.finish_with_message("完了しました！");
+    bar.finish_with_message("Completed！");
     Ok(())
 }
